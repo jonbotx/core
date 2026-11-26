@@ -58,10 +58,20 @@ pub fn init(
     tauri_handle: Option<TauriHandle>,
     trace_stdout: bool,
 ) -> Result<()> {
-    // Write our crates to the general log file at DEBUG level
+    // Write our crates to the general log file at DEBUG level.
+    //
+    // This file used to be opened with `Rotation::never`, i.e. it never rotated
+    // and grew without bound for the entire lifetime of the installation. On a
+    // busy node that is easily tens of GB (see upstream #893). Rotate daily and
+    // keep a week so the log directory stays bounded.
     let file_layer = {
-        let file_appender: RollingFileAppender =
-            tracing_appender::rolling::never(&dir, "swap-all.log");
+        let file_appender: RollingFileAppender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix("swap-all")
+            .filename_suffix("log")
+            .max_log_files(7)
+            .build(&dir)
+            .expect("initializing rolling file appender failed");
 
         fmt::layer()
             .with_writer(file_appender)
@@ -81,8 +91,8 @@ pub fn init(
     let tracing_file_layer = json_rolling_layer!(
         &dir,
         "tracing",
-        env_filter_with_all_crates(vec![(crates::OUR_CRATES.to_vec(), LevelFilter::TRACE)]),
-        24
+        env_filter_with_all_crates(vec![(crates::OUR_CRATES.to_vec(), verbose_level())]),
+        12
     );
 
     // Write Tor/arti to a verbose log file (tracing-tor*.log).
@@ -92,7 +102,7 @@ pub fn init(
     let tor_file_layer = json_rolling_layer!(
         &dir,
         "tracing-tor",
-        env_filter_with_all_crates(vec![(crates::TOR_CRATES.to_vec(), LevelFilter::DEBUG)]),
+        env_filter_with_all_crates(vec![(crates::TOR_CRATES.to_vec(), verbose_level())]),
         5,
         Rotation::MINUTELY
     );
@@ -101,8 +111,8 @@ pub fn init(
     let libp2p_file_layer = json_rolling_layer!(
         &dir,
         "tracing-libp2p",
-        env_filter_with_all_crates(vec![(crates::LIBP2P_CRATES.to_vec(), LevelFilter::TRACE)]),
-        24
+        env_filter_with_all_crates(vec![(crates::LIBP2P_CRATES.to_vec(), verbose_level())]),
+        6
     );
 
     // Write monero wallet crates to a verbose log file (tracing-monero-wallet*.log)
@@ -111,9 +121,9 @@ pub fn init(
         "tracing-monero-wallet",
         env_filter_with_all_crates(vec![(
             crates::MONERO_WALLET_CRATES.to_vec(),
-            LevelFilter::TRACE
+            verbose_level()
         )]),
-        24
+        6
     );
 
     // Layer for writing to the terminal
@@ -181,7 +191,7 @@ pub fn init(
     // Now we can use the tracing macros to log messages
     tracing::info!(
         logs_dir = %dir.as_ref().display(),
-        "Initialized tracing. General logs go to swap-all.log; verbose logs: tracing*.log (ours), tracing-tor*.log (tor), tracing-libp2p*.log (libp2p)"
+        "Initialized tracing. General logs go to swap-all.log*; verbose logs: tracing*.log (ours), tracing-tor*.log (tor), tracing-libp2p*.log (libp2p), tracing-monero-wallet*.log. Verbose level is DEBUG by default; set EIGEN_LOG_LEVEL=TRACE for maximum detail"
     );
 
     Ok(())
@@ -204,6 +214,22 @@ fn env_filter_with_all_crates(crates: Vec<(Vec<&str>, LevelFilter)>) -> Result<E
     }
 
     Ok(filter)
+}
+
+/// Level used for the per-subsystem verbose log files (`tracing*.log`).
+///
+/// These layers used to capture third-party crates (libp2p, tor, the Monero
+/// wallet) at TRACE, which produced several GB of logs per hour and, together
+/// with the never-rotating `swap-all.log`, was the main reason users' log
+/// directories grew into the tens of GB (upstream #893). Default to `DEBUG`,
+/// which is still enough to diagnose connection/swap issues, and let the
+/// operator raise or lower it via the `EIGEN_LOG_LEVEL` environment variable
+/// (e.g. `EIGEN_LOG_LEVEL=TRACE`) when deep debugging is needed.
+fn verbose_level() -> LevelFilter {
+    std::env::var("EIGEN_LOG_LEVEL")
+        .ok()
+        .and_then(|v| LevelFilter::from_str(v.trim()).ok())
+        .unwrap_or(LevelFilter::DEBUG)
 }
 
 mod crates {
