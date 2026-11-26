@@ -18,8 +18,13 @@ pub use swap_p2p::out_event::bob::OutEvent;
 
 const PROTOCOL_VERSION: &str = "/comit/xmr/btc/1.0.0";
 
-const INITIAL_REDIAL_INTERVAL: Duration = Duration::from_secs(1);
-const MAX_REDIAL_INTERVAL: Duration = Duration::from_secs(30);
+// Backoff for dialing makers we are not connected to. The backoff resets on a
+// successful connection, so a larger cap only slows retries to makers that keep
+// failing. Over Tor each failed attempt to an onion maker re-solves the
+// hidden-service PoW; retrying every <=30s forever pinned CPU cores, so back off
+// much more aggressively on failure.
+const INITIAL_REDIAL_INTERVAL: Duration = Duration::from_secs(10);
+const MAX_REDIAL_INTERVAL: Duration = Duration::from_secs(300);
 
 /// A `NetworkBehaviour` that represents an XMR/BTC swap node as Bob.
 #[derive(NetworkBehaviour)]

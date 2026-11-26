@@ -6,8 +6,19 @@ pub const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(15 * 60); // 1
 pub const BACKOFF_MULTIPLIER: f64 = 1.5;
 
 // Redial
-pub const REDIAL_INITIAL_INTERVAL: Duration = Duration::from_secs(1);
-pub const REDIAL_MAX_INTERVAL: Duration = Duration::from_secs(10);
+//
+// Peers that never connect are retried with exponential backoff, and the backoff
+// is reset as soon as a connection is established (see `BackoffTracker::reset`).
+// So the cap below only governs *unsuccessful* peers — it does not slow down a
+// healthy connection or a reconnect after a drop.
+//
+// Over Tor, every dial attempt to a `.onion` peer makes Arti re-solve that
+// service's hidden-service proof-of-work. With the old cap (10s/30s) a handful of
+// permanently-unreachable onion makers kept a whole set of CPU cores pegged with
+// PoW solving, continuously. Backing off much harder on failure cuts that churn
+// by more than an order of magnitude without affecting reachable peers.
+pub const REDIAL_INITIAL_INTERVAL: Duration = Duration::from_secs(10);
+pub const REDIAL_MAX_INTERVAL: Duration = Duration::from_secs(300);
 
 // Rendezvous
 pub const RENDEZVOUS_REDIAL_MAX_INTERVAL: Duration = Duration::from_secs(60);
@@ -24,8 +35,8 @@ pub const RENDEZVOUS_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(60);
 // Quote
 pub const CACHED_QUOTE_EXPIRY: Duration = Duration::from_secs(180);
 pub const QUOTE_INTERVAL: Duration = Duration::from_secs(45);
-pub const QUOTE_REDIAL_INTERVAL: Duration = Duration::from_secs(1);
-pub const QUOTE_REDIAL_MAX_INTERVAL: Duration = Duration::from_secs(30);
+pub const QUOTE_REDIAL_INTERVAL: Duration = Duration::from_secs(10);
+pub const QUOTE_REDIAL_MAX_INTERVAL: Duration = Duration::from_secs(300);
 pub const QUOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Swap setup
