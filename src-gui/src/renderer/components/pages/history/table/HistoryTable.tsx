@@ -13,7 +13,7 @@ import {
 import { useSwapInfosSortedByDate, useAreSwapInfosLoaded } from "store/hooks";
 import HistoryRow from "./HistoryRow";
 
-function SkeletonRow({ animate = true }: { animate?: boolean }) {
+function SkeletonRow({ animate = false }: { animate?: boolean }) {
   const animation = animate ? "pulse" : false;
   return (
     <TableRow>
@@ -51,7 +51,7 @@ function SkeletonRow({ animate = true }: { animate?: boolean }) {
   );
 }
 
-function SkeletonRows({ animate = true }: { animate?: boolean }) {
+function SkeletonRows({ animate = false }: { animate?: boolean }) {
   return (
     <>
       {Array.from({ length: 3 }).map((_, index) => (

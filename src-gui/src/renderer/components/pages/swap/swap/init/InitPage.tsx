@@ -28,7 +28,7 @@ export default function InitPage() {
       }}
       onClick={init}
     >
-      <Skeleton variant="rounded" sx={{ flex: 1, minHeight: "20vh" }} />
+      <Skeleton variant="rounded" sx={{ flex: 1, minHeight: "20vh" }} animation={false} />
       <Box
         sx={{
           flex: 1,
@@ -43,10 +43,10 @@ export default function InitPage() {
             sx={{ display: "flex", alignItems: "center", gap: 2 }}
             key={index}
           >
-            <Skeleton variant="circular" width={40} height={40} />
+            <Skeleton variant="circular" width={40} height={40} animation={false} />
             <Skeleton
               variant="rounded"
-              animation="wave"
+              animation={false}
               height={"7vh"}
               sx={{ flex: 1 }}
             />
@@ -68,7 +68,6 @@ export default function InitPage() {
           margin: "-1rem",
           borderRadius: "1rem",
           pointerEvents: "none",
-          backdropFilter: "blur(1px)",
         }}
       >
         <Button

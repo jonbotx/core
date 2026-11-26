@@ -38,10 +38,10 @@ export default function WalletPageLoadingState() {
               Available Funds
             </Typography>
             <Typography variant="h4">
-              <Skeleton variant="text" width="80%" />
+              <Skeleton variant="text" width="80%" animation={false} />
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              <Skeleton variant="text" width="40%" />
+              <Skeleton variant="text" width="40%" animation={false} />
             </Typography>
           </Box>
 
@@ -66,20 +66,25 @@ export default function WalletPageLoadingState() {
         </Box>
       </Card>
 
-      <Skeleton variant="rounded" width="100%">
+      <Skeleton variant="rounded" width="100%" animation={false}>
         <ActionableMonospaceTextBox content={DUMMY_ADDRESS} />
       </Skeleton>
 
       <Box sx={{ display: "flex", flexDirection: "row", gap: 2, mb: 2 }}>
         {Array.from({ length: 2 }).map((_, i) => (
-          <Skeleton key={i} variant="rounded" sx={{ borderRadius: "100px" }}>
+          <Skeleton
+            key={i}
+            variant="rounded"
+            animation={false}
+            sx={{ borderRadius: "100px" }}
+          >
             <Chip label="Loading..." variant="button" />
           </Skeleton>
         ))}
       </Box>
 
       <Typography variant="h5">Transaction History</Typography>
-      <Skeleton variant="rounded" width="100%" height={40} />
+      <Skeleton variant="rounded" width="100%" height={40} animation={false} />
     </Box>
   );
 }

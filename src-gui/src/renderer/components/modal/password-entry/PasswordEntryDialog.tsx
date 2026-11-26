@@ -67,7 +67,6 @@ export default function PasswordEntryDialog() {
       fullWidth
       BackdropProps={{
         sx: {
-          backdropFilter: "blur(8px)",
           backgroundColor: "rgba(0, 0, 0, 0.5)",
         },
       }}

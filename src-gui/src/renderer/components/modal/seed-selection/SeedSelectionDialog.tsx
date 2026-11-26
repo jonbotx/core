@@ -413,7 +413,6 @@ export default function SeedSelectionDialog() {
       sx={{ "& .MuiDialog-paper": { height: "min(32rem, 80vh)" } }}
       BackdropProps={{
         sx: {
-          backdropFilter: "blur(8px)",
           backgroundColor: "rgba(0, 0, 0, 0.5)",
         },
       }}

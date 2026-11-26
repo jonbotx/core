@@ -216,7 +216,6 @@ export default function MakerOfferItem({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            backdropFilter: "blur(2px)",
             borderRadius: 2,
             pointerEvents: "auto",
           }}
