@@ -36,8 +36,22 @@ pub struct Behaviour {
     /// Futures in here yield the PeerId and when a Future completes we dial that peer
     to_dial: FuturesHashSet<PeerId, ()>,
 
-    /// Tracks the current backoff state for each peer.
+    /// Tracks the current backoff state for peers we have connected to before.
     backoff: BackoffTracker,
+
+    /// Backoff used for peers we have never managed to connect to.
+    ///
+    /// Over Tor, every dial attempt to an onion peer makes Arti re-solve that
+    /// service's hidden-service proof of work, and the effort grows on each
+    /// failed attempt. Peers that never connect (makers that went offline but
+    /// are still advertised by the rendezvous point) are therefore retried much
+    /// more slowly than peers we know work. See the constants in
+    /// [`crate::defaults`].
+    unreachable_backoff: BackoffTracker,
+
+    /// Peers we have ever established a connection to. Determines whether a
+    /// peer uses `backoff` or `unreachable_backoff`.
+    ever_connected: HashSet<PeerId>,
 
     /// A queue of events to be sent to the swarm.
     to_swarm: VecDeque<ToSwarm<Event, Void>>,
@@ -58,9 +72,28 @@ impl Behaviour {
                 max_interval,
                 crate::defaults::BACKOFF_MULTIPLIER,
             ),
+            unreachable_backoff: BackoffTracker::new(
+                crate::defaults::REDIAL_UNREACHABLE_INITIAL_INTERVAL,
+                crate::defaults::REDIAL_UNREACHABLE_MAX_INTERVAL,
+                crate::defaults::BACKOFF_MULTIPLIER,
+            ),
+            ever_connected: HashSet::default(),
             to_swarm: VecDeque::new(),
             name,
             refresh: Trigger::new(),
+        }
+    }
+
+    /// Returns the backoff tracker that governs how often we retry `peer`.
+    ///
+    /// Peers we have connected to before use the regular backoff; peers we have
+    /// never connected to use the (much slower) unreachable backoff, because
+    /// dialing them is what re-triggers the Tor hidden-service PoW solver.
+    fn backoff_for(&mut self, peer: &PeerId) -> &mut BackoffTracker {
+        if self.ever_connected.contains(peer) {
+            &mut self.backoff
+        } else {
+            &mut self.unreachable_backoff
         }
     }
 
@@ -90,6 +123,7 @@ impl Behaviour {
     pub fn remove_peer(&mut self, peer: &PeerId) -> bool {
         if self.peers.remove(peer) {
             self.to_dial.remove(peer);
+            self.ever_connected.remove(peer);
 
             tracing::trace!("Stopped tracking peer");
             return true;
@@ -138,7 +172,7 @@ impl Behaviour {
         // If an override is provided, use that, otherwise use the backoff
         let next_dial_in = override_next_dial_in
             .into()
-            .unwrap_or_else(|| self.backoff.get(peer).current_interval);
+            .unwrap_or_else(|| self.backoff_for(peer).get(peer).current_interval);
 
         self.to_dial.replace(
             peer.clone(),
@@ -210,7 +244,7 @@ impl NetworkBehaviour for Behaviour {
                 tracing::trace!(peer = %event.peer_id, "Connection closed. We will schedule a redial for this peer.");
 
                 // Increment the backoff for the peer because we lost the connection.
-                self.backoff.increment(&event.peer_id);
+                self.backoff_for(&event.peer_id).increment(&event.peer_id);
 
                 Some(event.peer_id)
             }
@@ -235,7 +269,7 @@ impl NetworkBehaviour for Behaviour {
                                 tracing::trace!(peer = %peer_id, dial_error = ?event.error, "Dial failure occurred. We will backoff and schedule a redial for this peer.");
 
                                 // Increment the backoff for the peer because we failed to connect
-                                self.backoff.increment(&peer_id);
+                                self.backoff_for(&peer_id).increment(&peer_id);
 
                                 Some(peer_id)
                             } else {
@@ -253,7 +287,11 @@ impl NetworkBehaviour for Behaviour {
         // If we successfully connected to a peer, reset the backoff state for the peer
         match event {
             FromSwarm::ConnectionEstablished(e) if self.peers.contains(&e.peer_id) => {
+                // This peer is reachable, so from now on it is retried with the
+                // regular (short) backoff instead of the unreachable one.
+                self.ever_connected.insert(e.peer_id);
                 self.backoff.reset(&e.peer_id);
+                self.unreachable_backoff.reset(&e.peer_id);
             }
             _ => {}
         }
@@ -269,6 +307,7 @@ impl NetworkBehaviour for Behaviour {
         // Check if a refresh was requested
         if self.refresh.poll_next_unpin(cx).is_ready() {
             self.backoff.reset_all();
+            self.unreachable_backoff.reset_all();
 
             // Schedule immediate redials for all peers
             // If we are already connected, the dial will be ignored by the swarm
@@ -384,7 +423,9 @@ impl From<Event> for out_event::alice::OutEvent {
 mod tests {
     use super::*;
     use futures::task::noop_waker;
+    use libp2p::core::{ConnectedPoint, Endpoint};
     use libp2p::identity;
+    use libp2p::swarm::behaviour::ConnectionEstablished;
     use libp2p::swarm::{ConnectionId, DialFailure, ToSwarm};
 
     #[tokio::test]
@@ -394,8 +435,10 @@ mod tests {
 
         let peer = identity::Keypair::generate_ed25519().public().to_peer_id();
 
-        // Add the peer
+        // Add the peer and pretend we have connected to it before: this test
+        // covers the fast redial after a drop, which uses the regular backoff.
         let added = behaviour.add_peer(peer);
+        behaviour.ever_connected.insert(peer);
         assert!(added, "peer should be newly added");
         assert!(
             behaviour.has_pending_redial(&peer),
@@ -460,5 +503,80 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unreachable_peers_back_off_harder_than_reachable_ones() {
+        let mut behaviour =
+            Behaviour::new("test", Duration::from_secs(1), Duration::from_secs(10));
+
+        let unreachable = identity::Keypair::generate_ed25519().public().to_peer_id();
+        let reachable = identity::Keypair::generate_ed25519().public().to_peer_id();
+
+        behaviour.add_peer(unreachable);
+        behaviour.add_peer(reachable);
+
+        // Pretend we have connected to `reachable` before
+        behaviour.ever_connected.insert(reachable);
+
+        let mut unreachable_interval = Duration::ZERO;
+        let mut reachable_interval = Duration::ZERO;
+        for _ in 0..64 {
+            unreachable_interval = behaviour.backoff_for(&unreachable).increment(&unreachable);
+            reachable_interval = behaviour.backoff_for(&reachable).increment(&reachable);
+        }
+
+        // A never-connected peer is retried much more slowly...
+        assert!(
+            unreachable_interval > reachable_interval,
+            "unreachable {unreachable_interval:?} should exceed reachable {reachable_interval:?}"
+        );
+        // ...and its backoff is bounded by the unreachable cap (the exponential
+        // backoff randomises by +/-50%, hence the 1.5 factor).
+        assert!(
+            unreachable_interval
+                <= crate::defaults::REDIAL_UNREACHABLE_MAX_INTERVAL.mul_f64(1.5)
+        );
+        assert!(
+            unreachable_interval
+                >= crate::defaults::REDIAL_UNREACHABLE_MAX_INTERVAL.mul_f64(0.5)
+        );
+        // The reachable peer is still bounded by the normal cap.
+        assert!(reachable_interval <= Duration::from_secs(10).mul_f64(1.5));
+    }
+
+    #[test]
+    fn connecting_switches_a_peer_to_the_reachable_backoff() {
+        let mut behaviour =
+            Behaviour::new("test", Duration::from_secs(1), Duration::from_secs(10));
+        let peer = identity::Keypair::generate_ed25519().public().to_peer_id();
+
+        behaviour.add_peer(peer);
+
+        // Ramp the unreachable backoff to its cap
+        for _ in 0..64 {
+            behaviour.backoff_for(&peer).increment(&peer);
+        }
+        let capped = behaviour.backoff_for(&peer).get(&peer).current_interval;
+        assert!(capped > Duration::from_secs(10));
+
+        // Once we connect, the backoff resets and the peer uses the short cap
+        behaviour.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+            peer_id: peer,
+            connection_id: ConnectionId::new_unchecked(0),
+            endpoint: &ConnectedPoint::Dialer {
+                address: "/ip4/127.0.0.1/tcp/1234".parse().unwrap(),
+                role_override: Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            },
+            failed_addresses: &[],
+            other_established: 0,
+        }));
+
+        assert!(behaviour.ever_connected.contains(&peer));
+        assert_eq!(
+            behaviour.backoff_for(&peer).get(&peer).current_interval,
+            Duration::from_secs(1)
+        );
     }
 }
