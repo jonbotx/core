@@ -271,9 +271,10 @@ function FiatCurrencySetting() {
  * URL validation function, forces the URL to be in the format of "protocol://host:port/"
  */
 function isValidUrl(url: string, allowedProtocols: string[]): boolean {
-  const urlPattern = new RegExp(
-    `^(${allowedProtocols.join("|")})://[^\\s]+:\\d+/?$`,
-  );
+  const protocolPattern = allowedProtocols
+    .map((protocol) => protocol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const urlPattern = new RegExp(`^(${protocolPattern})://[^\\s]+:\\d+/?$`);
   return urlPattern.test(url);
 }
 
@@ -284,14 +285,14 @@ function ElectrumRpcUrlSetting() {
   const [tableVisible, setTableVisible] = useState(false);
   const network = getNetwork();
 
-  const isValid = (url: string) => isValidUrl(url, ["ssl", "tcp"]);
+  const isValid = (url: string) => isValidUrl(url, ["ssl", "tcp", "ssl+insecure"]);
 
   return (
     <TableRow>
       <TableCell>
         <SettingLabel
           label="Custom Electrum RPC URL"
-          tooltip="This is the URL of the Electrum server that the GUI will connect to. It is used to sync Bitcoin transactions. If you leave this field empty, the GUI will choose from a list of known servers at random."
+          tooltip="This is the URL of the Electrum server that the GUI will connect to. It is used to sync Bitcoin transactions. If you leave this field empty, the GUI will choose from a list of known servers at random. For a self-hosted server with a self-signed certificate, use ssl+insecure://host:port to connect over TLS without verifying the certificate."
         />
       </TableCell>
       <TableCell>
