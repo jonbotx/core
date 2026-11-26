@@ -537,6 +537,33 @@ impl Default for ElectrumBalancerConfig {
     }
 }
 
+/// URL scheme for Electrum servers that should be used over TLS without
+/// verifying the server certificate.
+///
+/// `ssl+insecure://host:port` behaves exactly like `ssl://host:port`, except
+/// that the server certificate is accepted regardless of its issuer. This is
+/// required for self-hosted Electrum servers that use a self-signed certificate
+/// or one signed by a private CA (for example the StartOS Fulcrum package,
+/// which only exposes a TLS endpoint with the box's own Root CA).
+///
+/// This is an explicit, per-server opt-in: it is never enabled implicitly, and
+/// only the servers whose URL carries this scheme skip verification.
+pub const INSECURE_SSL_SCHEME: &str = "ssl+insecure://";
+
+/// Splits an Electrum URL into the URL to hand to the client and whether TLS
+/// certificate verification should be enabled for it.
+///
+/// Only [`INSECURE_SSL_SCHEME`] disables verification; every other URL keeps the
+/// default behaviour of verifying the certificate against the trust store.
+fn split_electrum_url(url: &str) -> (String, bool) {
+    match url.strip_prefix(INSECURE_SSL_SCHEME) {
+        // Rewrite to `ssl://` so the underlying client performs the TLS
+        // handshake, and disable certificate/domain validation.
+        Some(host_and_port) => (format!("ssl://{host_and_port}"), false),
+        None => (url.to_string(), true),
+    }
+}
+
 /// Trait for creating Electrum clients
 pub trait ElectrumClientFactory<C> {
     fn create_client(&self, url: &str, config: &ElectrumBalancerConfig) -> Result<Arc<C>, Error>;
@@ -551,8 +578,13 @@ impl ElectrumClientFactory<BdkElectrumClient<Client>> for BdkElectrumClientFacto
         url: &str,
         config: &ElectrumBalancerConfig,
     ) -> Result<Arc<BdkElectrumClient<Client>>, Error> {
+        // `ssl+insecure://` servers are connected to with TLS but without
+        // certificate verification (self-signed / private-CA certificates).
+        let (url, validate_domain) = split_electrum_url(url);
+
         let client_config = ConfigBuilder::new()
             .timeout(Some(config.request_timeout))
+            .validate_domain(validate_domain)
             // TODO: Why is this set to 1?
             // The goal of this crate is to extract retry logic out of the electrum client library
             // and instead handle inside this crate. However, the electrum client library is quite inflexible.
@@ -561,7 +593,7 @@ impl ElectrumClientFactory<BdkElectrumClient<Client>> for BdkElectrumClientFacto
             .retry(1)
             .build();
 
-        let client = Client::from_config(url, client_config).map_err(|e| {
+        let client = Client::from_config(&url, client_config).map_err(|e| {
             // Wrap connection errors with DNS resolution context
             match &e {
                 Error::IOError(io_err) if io_err.kind() == std::io::ErrorKind::NotFound => {
@@ -727,6 +759,26 @@ mod tests {
     };
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn insecure_ssl_scheme_disables_verification_and_is_rewritten() {
+        let (url, validate) = split_electrum_url("ssl+insecure://127.0.0.1:50002");
+        assert_eq!(url, "ssl://127.0.0.1:50002");
+        assert!(!validate);
+    }
+
+    #[test]
+    fn regular_urls_keep_validation_enabled() {
+        for url in [
+            "ssl://blockstream.info:700",
+            "tcp://electrum.eigenwallet.org:22293",
+            "ssl+insecure.example.com:50002",
+        ] {
+            let (split, validate) = split_electrum_url(url);
+            assert_eq!(split, url);
+            assert!(validate, "{url} must not disable TLS verification");
+        }
+    }
 
     /// Mock client for testing
     #[derive(Debug)]
